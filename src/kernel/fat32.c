@@ -324,38 +324,38 @@ static const char *kernel_strchr(const char *str, int character) {
  * Returns a pointer to the start of the remaining unparsed path.
  */
 static const char *get_next_path_node(const char *path, char *output_buffer) {
-    // Skip leading slashes
+    // Skip all leading slashes
     while (*path == '/') {
         path++;
     }
 
+    // End of path reached
     if (*path == '\0') {
         return NULL;
     }
 
-    // Find where this node ends (either at the next slash or end of string)
-    const char *next_slash = kernel_strchr(path, '/');
     size_t length = 0;
 
-    if (next_slash != NULL) {
-        length = next_slash - path;
-    } else {
-        // No more slashes, this is the final file/folder name
-        length = 0;
-        while (path[length] != '\0') {
-            length++;
-        }
+    // Copy until slash or null terminator
+    while (path[length] != '/' && path[length] != '\0') {
+        output_buffer[length] = path[length];
+        length++;
     }
 
-    // Copy characters into our isolated workspace buffer
-    for (size_t i = 0; i < length; i++) {
-        output_buffer[i] = path[i];
-    }
-    output_buffer[length] = '\0'; // Cleanly null-terminate it
+    output_buffer[length] = '\0';
 
-    return path + length; // Return pointer to the rest of the string
+    // Return pointer to slash or end-of-string
+    return path + length;
 }
 
+static void fat32_normalize_path_token(char *str) {
+    while (*str) {
+        if (*str >= 'a' && *str <= 'z') {
+            *str = *str - ('a' - 'A');
+        }
+        str++;
+    }
+}
 
 /**
  * Resolves a nested virtual file path string and returns its direct metadata.
@@ -365,58 +365,71 @@ static const char *get_next_path_node(const char *path, char *output_buffer) {
  * @return 1 on successful resolution, 0 if any folder or file path node does not exist.
  */
 int fat32_resolve_path(const char *path, uint32_t root_cluster, struct fat32_file_info *out_info) {
-    if (!path || path[0] == '\0' || !out_info) return 0;
+    if (!path || !out_info) {
+        return 0;
+    }
+
+    // Special-case root directory "/"
+    if (path[0] == '/' && path[1] == '\0') {
+        out_info->name[0] = '/';
+        out_info->name[1] = '\0';
+        out_info->size = 0;
+        out_info->is_directory = 1;
+        out_info->first_cluster = root_cluster;
+        return 1;
+    }
 
     uint32_t current_cluster = root_cluster;
-    char current_node_name[13]; // Safe space for normal 8.3 plus dot and null
-    
+    char current_node_name[13];
+
     const char *path_cursor = path;
 
-    // Loop continuously until we consume the entire path string
     while ((path_cursor = get_next_path_node(path_cursor, current_node_name)) != NULL) {
-        
-        // 1. Get a clean listing of the directory we are currently standing in
+
+        // FAT32 8.3 names are usually uppercase
+        fat32_normalize_path_token(current_node_name);
+
         struct fat32_dir_listing *listing = fat32_list_directory(current_cluster);
-        if (!listing) return 0;
+        if (!listing) {
+            return 0;
+        }
 
         int node_found = 0;
 
-        // 2. Scan every file/folder in this current directory table
         for (uint32_t i = 0; i < listing->count; i++) {
-            // Case-insensitive/exact match comparison against our isolated path node name
-            if (memcmp(listing->entries[i].name, current_node_name, 13) == 0) {
-                
-                // Copy the matching structural data out
-                for (int j = 0; j < 13; j++) {
-                    out_info->name[j] = listing->entries[i].name[j];
-                }
-                out_info->size = listing->entries[i].size;
-                out_info->is_directory = listing->entries[i].is_directory;
-                out_info->first_cluster = listing->entries[i].first_cluster;
+
+            // Proper string comparison
+            if (strcmp(listing->entries[i].name, current_node_name) == 0) {
+
+                // Copy full metadata
+                *out_info = listing->entries[i];
 
                 node_found = 1;
                 break;
             }
         }
 
-        // Clean up memory allocations immediately to prevent kernel memory exhaustion
         fat32_free_dir_listing(listing);
 
-        // If the path item wasn't in this folder, the entire path is invalid
         if (!node_found) {
-            return 0; 
+            return 0;
         }
 
-        // 3. Setup for the next iteration loop
+        // Skip remaining slashes before continuing
+        while (*path_cursor == '/') {
+            path_cursor++;
+        }
+
+        // If more path remains, current node MUST be a directory
         if (*path_cursor != '\0') {
-            // If there is more path left, the item we just found MUST be a directory
+
             if (!out_info->is_directory) {
-                return 0; // Error: Attempted to treat a file like a directory path node!
+                return 0;
             }
-            current_cluster = out_info->first_cluster; // Dive deeper down the tree
+
+            current_cluster = out_info->first_cluster;
         }
     }
 
-    return 1; // Success! out_info now holds the metadata of the final file or directory.
+    return 1;
 }
-

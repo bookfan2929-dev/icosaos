@@ -43,3 +43,15 @@ void *memset(void *s, int c, size_t n) {
     }
     return s;
 }
+
+int strcmp(const char *a, const char *b) {
+    while (*a && *b) {
+        if (*a != *b) {
+            return (unsigned char)*a - (unsigned char)*b;
+        }
+        a++;
+        b++;
+    }
+
+    return (unsigned char)*a - (unsigned char)*b;
+}

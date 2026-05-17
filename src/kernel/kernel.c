@@ -148,7 +148,129 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr) {
 
 	
 
+	printkl("=== FAT32 PATH RESOLVER TEST ===");
 	
+	// Initialize FAT32 and get root cluster
+	uint32_t root_cluster = init_fat32();
+	
+	if (root_cluster == 0) {
+	    printkl("FAT32 init failed!");
+	    return;
+	}
+	
+	printkl("FAT32 initialized successfully.");
+	
+	
+	// --------------------------------------------------
+	// TEST 1: Resolve root directory
+	// --------------------------------------------------
+	
+	struct fat32_file_info info;
+	
+	if (fat32_resolve_path("/", root_cluster, &info)) {
+	    printkl("Resolved root directory successfully.");
+	} else {
+	    printkl("FAILED: Could not resolve root directory.");
+	}
+	
+	
+	// --------------------------------------------------
+	// TEST 2: Resolve a DIRECTORY
+	// CHANGE THIS TO A REAL DIRECTORY YOU HAVE
+	// --------------------------------------------------
+	
+	if (fat32_resolve_path("/BOOT", root_cluster, &info)) {
+	
+	    printkl("Resolved directory:");
+	
+	    printk("Name: ");
+	    printkl(info.name);
+	
+	    printk("Cluster: ");
+	    // Replace with your integer print if available
+	    printkl("(cluster resolved)");
+	
+	    if (info.is_directory) {
+	        printkl("Confirmed directory.");
+	    } else {
+	        printkl("ERROR: Expected directory but got file.");
+	    }
+	
+	} else {
+	    printkl("FAILED: Could not resolve /BOOT");
+	}
+	
+	
+	// --------------------------------------------------
+	// TEST 3: Resolve a FILE
+	// CHANGE THIS TO A REAL FILE YOU HAVE
+	// --------------------------------------------------
+	
+	if (fat32_resolve_path("/BOOT/TEST.TXT", root_cluster, &info)) {
+	
+	    printkl("Resolved file:");
+	
+	    printk("Name: ");
+	    printkl(info.name);
+	
+	    if (!info.is_directory) {
+	        printkl("Confirmed regular file.");
+	    } else {
+	        printkl("ERROR: Expected file but got directory.");
+	    }
+	
+	    // --------------------------------------------------
+	    // TEST 4: Read file contents
+	    // --------------------------------------------------
+	
+	    void *file_data = fat32_read_file(info.first_cluster, info.size);
+	
+	    if (file_data) {
+	
+	        printkl("Successfully read file contents.");
+	
+	        // Print first 64 bytes as characters
+	        // Useful for text files
+	        char *text = (char *)file_data;
+	
+	        printkl("First bytes:");
+	
+	        for (uint32_t i = 0; i < 64 && i < info.size; i++) {
+	
+	            char c = text[i];
+	
+	            // Replace non-printable chars
+	            if (c < 32 || c > 126) {
+	                c = '.';
+	            }
+	
+	            terminal_putchar(c);
+	        }
+	
+	        terminal_putchar('\n');
+	
+	        kfree(file_data);
+	
+	    } else {
+	        printkl("FAILED: Could not read file.");
+	    }
+	
+	} else {
+	    printkl("FAILED: Could not resolve /KERNEL.BIN");
+	}
+	
+	
+	// --------------------------------------------------
+	// TEST 5: Invalid path
+	// --------------------------------------------------
+	
+	if (!fat32_resolve_path("/THIS_DOES_NOT_EXIST.TXT", root_cluster, &info)) {
+	    printkl("Correctly rejected invalid path.");
+	} else {
+	    printkl("ERROR: Invalid path unexpectedly resolved.");
+	}
+	
+	printkl("=== FAT32 TEST COMPLETE ===");
 		
 	
 	// early kernel panic test
