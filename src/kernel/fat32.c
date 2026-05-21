@@ -25,7 +25,7 @@ uint32_t init_fat32(void) {
     uint32_t root_cluster = 0; // Temp variable to hold root cluster target
     
     if (!fat32_read_sector(0, sector_buffer)) {
-        printkl("Failed to read FAT32 Boot Record!");
+        lprintkl("Failed to read FAT32 Boot Record!");
         kfree(sector_buffer);
         return 0;
     }
@@ -34,7 +34,7 @@ uint32_t init_fat32(void) {
     struct fat32_bpb *local_bpb = (struct fat32_bpb *)sector_buffer;
 
     if (local_bpb->boot_signature == 0x29) {
-        printkl("Successfully detected FAT32 Volume!");
+        lprintkl("Successfully detected FAT32 Volume!");
     }
 
     // Extract your layout properties safely into your existing globals
@@ -225,20 +225,20 @@ void test_directory_listing(uint32_t root_cluster) {
     struct fat32_dir_listing *list = fat32_list_directory(root_cluster);
     
     if (list == NULL) {
-        printkl("Failed to read root directory.");
+        lprintkl("Failed to read root directory.");
         return;
     }
 
     for (uint32_t i = 0; i < list->count; i++) {
         // Output format example: "[DIR] FOLDERNAME" or "[FILE] FILE.TXT (1024 bytes)"
         if (list->entries[i].is_directory) {
-            printk("[DIR]  ");
-            printkl(list->entries[i].name);
+            lprintk("[DIR]  ");
+            lprintkl(list->entries[i].name);
         } else {
-            printk("[FILE] ");
-            printk(list->entries[i].name);
+            lprintk("[FILE] ");
+            lprintk(list->entries[i].name);
             // You can implement an integer-to-string print helper later to display size
-            printkl(""); 
+            lprintkl(""); 
         }
     }
 

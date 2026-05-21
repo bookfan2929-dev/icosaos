@@ -8,7 +8,7 @@
 #define PAGE_WRITE   0x2
 #define PAGE_USER    0x4
 
-void init_paging(void);
+void init_paging(uint32_t fb_phys_addr, uint32_t fb_pitch_bytes, uint32_t fb_height);
 int map_page(void *virtual_addr, void *physical_addr, uint32_t flags);
 
 #endif

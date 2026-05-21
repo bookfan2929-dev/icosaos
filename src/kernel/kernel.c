@@ -1,6 +1,6 @@
 #include <stdint.h>
 #include <stddef.h>
-#include "headers/vga.h"
+#include "headers/lvga.h"
 #include "headers/gdt.h"
 #include "headers/idt.h"
 #include "headers/handler.h"
@@ -9,32 +9,117 @@
 #include "headers/io.h"
 #include "headers/fat32.h"
 #include "headers/string.h"
+#include "headers/vga_graphics.h"
+// Multiboot2 tag header structure
+struct multiboot_tag {
+    uint32_t type;
+    uint32_t size;
+};
+
+// Multiboot2 framebuffer info structure
+struct multiboot_tag_framebuffer {
+    uint32_t type; // Will be 8
+    uint32_t size;
+    uint64_t framebuffer_addr;
+    uint32_t framebuffer_pitch;
+    uint32_t framebuffer_width;
+    uint32_t framebuffer_height;
+    uint8_t framebuffer_bpp;
+    uint8_t framebuffer_type;
+    uint8_t reserved;
+    // Color info fields follow here, but are omitted for simplicity
+};
+
+
 
 void kernel_main(uint32_t magic, uint32_t mbi_addr) {
 
-	terminal_initialize();
+if (magic != 0x36D76289) {
+        return;
+    }
 
-	printkl("Loading GDT.");
+    uint32_t mbi_size = *(volatile uint32_t*)mbi_addr;
+    uint32_t offset = 8; 
+
+    uint32_t *fb_addr = 0;
+    uint32_t fb_width_local = 0;
+    uint32_t fb_height_local = 0;
+    uint32_t fb_pitch_local = 0;
+    uint8_t fb_bpp_local = 0;
+
+    while (offset < mbi_size) {
+        struct multiboot_tag *tag = (struct multiboot_tag *)(uintptr_t)(mbi_addr + offset);
+        
+        if (tag->type == 0 && tag->size == 8) {
+            break;
+        }
+
+        // Inside your multiboot parsing loop block inside kernel_main:
+        if (tag->type == 8) {
+            struct multiboot_tag_framebuffer *fb_tag = (struct multiboot_tag_framebuffer *)tag;
+
+			fb_addr = (uint32_t *)fb_tag->framebuffer_addr;
+			fb_width_local = fb_tag->framebuffer_width;
+			fb_height_local = fb_tag->framebuffer_height;
+			fb_pitch_local = fb_tag->framebuffer_pitch;
+			fb_bpp_local = fb_tag->framebuffer_bpp;
+            
+            vga_init(
+                (void *)fb_addr,
+                fb_width_local,
+                fb_height_local,
+                fb_pitch_local,
+                fb_bpp_local // <-- Critical new parameter argument
+            );
+            break;
+        }
+        
+
+        // Advance using explicit variable math to avoid standard pointer optimization pitfalls
+        offset += (tag->size + 7) & ~7;
+    }
+    
+	//vga_init(fb_addr, fb_width_local, fb_height_local, fb_pitch_local);
+
+	vga_clear_screen(0x0000000F);
+
+	vga_print("Loaded kernel\n",0x00FFFFFF, 0);
+
+	//terminal_initialize();
+
+	//lprintkl("Loading GDT.");
 
 	gdt_init();
 	
-	printkl("Loaded GDT, now loading IDT.");
+	vga_print("initialized gdt\n",0x00FFFFFF,0);
+	
+	//lprintkl("Loaded GDT, now loading IDT.");
 
 	idt_init();
 
+	vga_print("initialized idt\n",0x00FFFFFF,0);
+
 	init_pic();
 
-	printkl("Loaded IDT and PICs");
+	vga_print("initialized pic\n",0x00FFFFFF,0);
 
-	printkl("parsing multiboot2 headers");
+	//lprintkl("Loaded IDT and PICs");
 
-	if (magic != 0x36d76289) {
-		panic("Invalid multiboot2 magic");
-	}
+	//lprintkl("parsing multiboot2 headers");
+
+
 
 	init_bitmap_allocator(mbi_addr);
 
-	init_paging();			
+	vga_print("initalized bitmap allocator\n", 0x00FFFFFF, 0);
+
+	init_paging((uint32_t)fb_addr, fb_pitch_local, fb_height_local);			
+
+	vga_print("initialized allocator and paging\n",0x00FFFFFF,0);
+
+	inb(0x60); // Read and discard whatever is currently in the buffer
+	__asm__ volatile("sti"); // Now safely open the interrupt floodgates!
+	
 
 	// Map virtual 0xC00B8000 directly to the physical VGA text buffer
 	//map_page((void*)0xC00B8000, (void*)0xB8000, PAGE_PRESENT | PAGE_WRITE);
@@ -57,108 +142,20 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr) {
 
 //	__asm__ volatile("sti");
 
-//	printkl("Os is now taking input, type something:");	
-
-	// --- FAT32 FILESYSTEM INITIALIZATION & TESTING ---
-	/*{
-	    // Allocate a temporary 512-byte block on your new heap
-	    uint8_t *sector_buffer = (uint8_t *)kmalloc(512);
-	    if (!sector_buffer) {
-	        printkl("FAT32 Test Error: Out of memory for sector buffer!");
-	    } else {
-	        // Read the absolute partition start sector (LBA 2048)
-	        // by requesting relative sector 0
-	        if (!fat32_read_sector(0, sector_buffer)) {
-	            printkl("FAT32 Test Error: Failed to read hardware sector!");
-	        } else {
-	            struct fat32_bpb *bpb = (struct fat32_bpb *)sector_buffer;
+//	lprintkl("Os is now taking input, type something:");	
+	/*
 	
-	            // Save the critical filesystem layout constants globally
-	            reserved_sector_count = bpb->reserved_sector_count;
-	            sectors_per_cluster = bpb->sectors_per_cluster;
-	            
-	            // Calculate where the cluster files data region physically starts
-	            data_region_start_sector = bpb->reserved_sector_count + 
-	                                       (bpb->num_fats * bpb->fat_size_32);
-	
-	            printkl("FAT32 filesystem successfully initialized!");
-	
-	            // Grab a full directory list targeting the Root Directory (Cluster 2)
-	            struct fat32_dir_listing *list = fat32_list_directory(bpb->root_cluster);
-	            
-	            if (list == NULL) {
-	                printkl("FAT32 Test Error: Could not parse root directory listing.");
-	            } else {
-	                printkl("--- ROOT DIRECTORY CONTENTS ---");
-	                
-	                if (list->count == 0) {
-	                    printkl("(Directory is completely empty)");
-	                }
-	
-	                for (uint32_t i = 0; i < list->count; i++) {
-	                    if (list->entries[i].is_directory) {
-	                        printk("[DIR]  ");
-	                        printkl(list->entries[i].name);
-	                    } else {
-	                        printk("[FILE] ");
-	                        printkl(list->entries[i].name);
-	                    }
-
-	                    if (memcmp(list->entries[i].name, "TEST.TXT", 8) == 0) {
-	                            printkl("Found TEST.TXT! Attempting to read content...");
-	                            
-	                            // 1. Allocate a text buffer that is 1 byte LARGER than the actual file size
-	                            char *str_buffer = (char *)kmalloc(list->entries[i].size + 1);
-	                            
-	                            if (str_buffer) {
-	                                // 2. Read the raw file data using your original function
-	                                void *raw_file_data = fat32_read_file(list->entries[i].first_cluster, list->entries[i].size);
-	                                
-	                                if (raw_file_data) {
-	                                    // 3. Copy the raw file data into our string buffer
-	                                    memcpy(str_buffer, raw_file_data, list->entries[i].size);
-	                                    
-	                                    // 4. Force place the null terminator at the exact end of the file data
-	                                    str_buffer[list->entries[i].size] = '\0';
-	                                    
-	                                    // 5. Print it safely!
-	                                    printk("Content: ");
-	                                    printkl(str_buffer);
-	                                    
-	                                    // Clean up both allocations
-	                                    kfree(raw_file_data);
-	                                }
-	                                kfree(str_buffer);
-	                            }
-	                        }
-	                }
-	                
-	                printkl("-------------------------------");
-	                
-	                // Clean up the dynamic list arrays to prevent memory leaks
-	                fat32_free_dir_listing(list);
-	            }
-	        }
-	        
-	        // Clean up the initial sector buffer allocation
-	        kfree(sector_buffer);
-	    }
-	}
-	*/
-
-	
-
-	printkl("=== FAT32 PATH RESOLVER TEST ===");
+	lprintkl("=== FAT32 PATH RESOLVER TEST ===");
 	
 	// Initialize FAT32 and get root cluster
 	uint32_t root_cluster = init_fat32();
 	
 	if (root_cluster == 0) {
-	    printkl("FAT32 init failed!");
+	    lprintkl("FAT32 init failed!");
 	    return;
 	}
 	
-	printkl("FAT32 initialized successfully.");
+	lprintkl("FAT32 initialized successfully.");
 	
 	
 	// --------------------------------------------------
@@ -168,9 +165,9 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr) {
 	struct fat32_file_info info;
 	
 	if (fat32_resolve_path("/", root_cluster, &info)) {
-	    printkl("Resolved root directory successfully.");
+	    lprintkl("Resolved root directory successfully.");
 	} else {
-	    printkl("FAILED: Could not resolve root directory.");
+	    lprintkl("FAILED: Could not resolve root directory.");
 	}
 	
 	
@@ -181,23 +178,23 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr) {
 	
 	if (fat32_resolve_path("/BOOT", root_cluster, &info)) {
 	
-	    printkl("Resolved directory:");
+	    lprintkl("Resolved directory:");
 	
-	    printk("Name: ");
-	    printkl(info.name);
+	    lprintk("Name: ");
+	    lprintkl(info.name);
 	
-	    printk("Cluster: ");
+	    lprintk("Cluster: ");
 	    // Replace with your integer print if available
-	    printkl("(cluster resolved)");
+	    lprintkl("(cluster resolved)");
 	
 	    if (info.is_directory) {
-	        printkl("Confirmed directory.");
+	        lprintkl("Confirmed directory.");
 	    } else {
-	        printkl("ERROR: Expected directory but got file.");
+	        lprintkl("ERROR: Expected directory but got file.");
 	    }
 	
 	} else {
-	    printkl("FAILED: Could not resolve /BOOT");
+	    lprintkl("FAILED: Could not resolve /BOOT");
 	}
 	
 	
@@ -208,15 +205,15 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr) {
 	
 	if (fat32_resolve_path("/BOOT/TEST.TXT", root_cluster, &info)) {
 	
-	    printkl("Resolved file:");
+	    lprintkl("Resolved file:");
 	
-	    printk("Name: ");
-	    printkl(info.name);
+	    lprintk("Name: ");
+	    lprintkl(info.name);
 	
 	    if (!info.is_directory) {
-	        printkl("Confirmed regular file.");
+	        lprintkl("Confirmed regular file.");
 	    } else {
-	        printkl("ERROR: Expected file but got directory.");
+	        lprintkl("ERROR: Expected file but got directory.");
 	    }
 	
 	    // --------------------------------------------------
@@ -227,13 +224,13 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr) {
 	
 	    if (file_data) {
 	
-	        printkl("Successfully read file contents.");
+	        lprintkl("Successfully read file contents.");
 	
 	        // Print first 64 bytes as characters
 	        // Useful for text files
 	        char *text = (char *)file_data;
 	
-	        printkl("First bytes:");
+	        lprintkl("First bytes:");
 	
 	        for (uint32_t i = 0; i < 64 && i < info.size; i++) {
 	
@@ -252,11 +249,11 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr) {
 	        kfree(file_data);
 	
 	    } else {
-	        printkl("FAILED: Could not read file.");
+	        lprintkl("FAILED: Could not read file.");
 	    }
 	
 	} else {
-	    printkl("FAILED: Could not resolve /KERNEL.BIN");
+	    lprintkl("FAILED: Could not resolve /KERNEL.BIN");
 	}
 	
 	
@@ -265,23 +262,25 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr) {
 	// --------------------------------------------------
 	
 	if (!fat32_resolve_path("/THIS_DOES_NOT_EXIST.TXT", root_cluster, &info)) {
-	    printkl("Correctly rejected invalid path.");
+	    lprintkl("Correctly rejected invalid path.");
 	} else {
-	    printkl("ERROR: Invalid path unexpectedly resolved.");
+	    lprintkl("ERROR: Invalid path unexpectedly resolved.");
 	}
 	
-	printkl("=== FAT32 TEST COMPLETE ===");
-		
-	
+	lprintkl("=== FAT32 TEST COMPLETE ===");
+	*/	
 	// early kernel panic test
 	//__asm__ volatile("xor %eax, %eax; div %eax"); 
 
+
+	
 
 
 		
 
     // Halt
-    
+	
+    return;
 }
 
 

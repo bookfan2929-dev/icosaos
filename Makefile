@@ -4,7 +4,7 @@ CC = $(CROSS)/i686-elf-gcc
 LD = $(CROSS)/i686-elf-ld
 AS = $(CROSS)/i686-elf-as
 
-CFLAGS = -ffreestanding -O2 -Wall -Wextra -m32
+CFLAGS = -ffreestanding -O0 -Wall -Wextra -m32
 LDFLAGS = -T linker.ld -nostdlib -m elf_i386
 
 SRC = src
@@ -19,7 +19,7 @@ OBJS = $(ENTRY) $(KERNEL_OBJS)
 KERNEL = $(BUILD)/kernel.elf
 
 QEMU = qemu-system-i386
-QEMUFLAGS = -hda $(IMG) -m 512 -serial stdio -boot c
+QEMUFLAGS = -hda $(IMG) -m 512 -monitor stdio -boot c -vga std 
 
 all: $(KERNEL) $(IMG)
 

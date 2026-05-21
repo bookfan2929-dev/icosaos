@@ -1,7 +1,7 @@
 #ifndef UTILS_H
 #define UTILS_H
 
-void printk(const char *message);
-void printkl(const char *message);
+void lprintk(const char *message);
+void lprintkl(const char *message);
 
 #endif

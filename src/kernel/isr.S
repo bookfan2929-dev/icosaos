@@ -39,5 +39,21 @@ exception_gate_32:
     iretl
 
 keyboard_gate:
-	call keyboard_handler
-	iretl
+	pusha          # Save all general-purpose registers (EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI)
+    push %ds        # Save data segment descriptor registers
+    push %es
+    push %fs
+    push %gs
+
+    mov %ax, 0x10   # Load kernel data segment descriptor (assumes GDT data layout index)
+    mov %ds, %ax
+    mov %es, %ax
+
+    call keyboard_handler # Execute your C logic block
+
+    pop %gs         # Restore segment registers in exact reverse order
+    pop %fs
+    pop %es
+    pop %ds
+    popa           # Restore general-purpose registers
+    iretl          # Interrupt Return (32-bit pop of EIP, CS, EFLAGS)
