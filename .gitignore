@@ -2,3 +2,6 @@ build/
 *.img
 *.o
 *.elf
+*.ppm
+*.png
+*.dmp
