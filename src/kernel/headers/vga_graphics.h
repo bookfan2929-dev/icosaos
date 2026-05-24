@@ -15,4 +15,12 @@ void vga_put_char(char c, uint32_t fg_color, uint32_t bg_color);
 // Prints a standard null-terminated string to the interface
 void vga_print(const char *str, uint32_t fg_color, uint32_t bg_color);
 
+uint32_t vga_get_cursor_x(void);
+
+uint32_t vga_get_cursor_y(void);
+
+void vga_backspace(uint32_t bg_color);
+
+void vga_set_cursor(uint32_t x, uint32_t y);
+
 #endif

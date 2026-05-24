@@ -10,6 +10,10 @@
 #include "headers/fat32.h"
 #include "headers/string.h"
 #include "headers/vga_graphics.h"
+#include "headers/vga_cosmetics.h"
+#include "headers/klog.h"
+#include "headers/keyboard.h" // Added our new keyboard header
+
 // Multiboot2 tag header structure
 struct multiboot_tag {
     uint32_t type;
@@ -27,14 +31,19 @@ struct multiboot_tag_framebuffer {
     uint8_t framebuffer_bpp;
     uint8_t framebuffer_type;
     uint8_t reserved;
-    // Color info fields follow here, but are omitted for simplicity
 };
 
-
+struct acpi_rsdp_10 {
+    char signature[8];       // Must be "RSD PTR "
+    uint8_t checksum;        // Total sum of all 20 bytes must equal 0
+    char oem_id[6];          // OEM identifier string
+    uint8_t revision;        // 0 for ACPI 1.0
+    uint32_t rsdt_address;   // Physical memory address of the RSDT
+} __attribute__((packed));
 
 void kernel_main(uint32_t magic, uint32_t mbi_addr) {
 
-if (magic != 0x36D76289) {
+    if (magic != 0x36D76289) {
         return;
     }
 
@@ -47,6 +56,8 @@ if (magic != 0x36D76289) {
     uint32_t fb_pitch_local = 0;
     uint8_t fb_bpp_local = 0;
 
+    void *acpi_rsdp_phys = NULL;
+
     while (offset < mbi_size) {
         struct multiboot_tag *tag = (struct multiboot_tag *)(uintptr_t)(mbi_addr + offset);
         
@@ -54,233 +65,271 @@ if (magic != 0x36D76289) {
             break;
         }
 
-        // Inside your multiboot parsing loop block inside kernel_main:
         if (tag->type == 8) {
             struct multiboot_tag_framebuffer *fb_tag = (struct multiboot_tag_framebuffer *)tag;
 
-			fb_addr = (uint32_t *)fb_tag->framebuffer_addr;
-			fb_width_local = fb_tag->framebuffer_width;
-			fb_height_local = fb_tag->framebuffer_height;
-			fb_pitch_local = fb_tag->framebuffer_pitch;
-			fb_bpp_local = fb_tag->framebuffer_bpp;
+            fb_addr = (uint32_t *)fb_tag->framebuffer_addr;
+            fb_width_local = fb_tag->framebuffer_width;
+            fb_height_local = fb_tag->framebuffer_height;
+            fb_pitch_local = fb_tag->framebuffer_pitch;
+            fb_bpp_local = fb_tag->framebuffer_bpp;
             
             vga_init(
                 (void *)fb_addr,
                 fb_width_local,
                 fb_height_local,
                 fb_pitch_local,
-                fb_bpp_local // <-- Critical new parameter argument
+                fb_bpp_local 
             );
             break;
+        } else if (tag->type == 14) {
+        	acpi_rsdp_phys = (void *)((uintptr_t)tag + 8);
         }
         
-
-        // Advance using explicit variable math to avoid standard pointer optimization pitfalls
         offset += (tag->size + 7) & ~7;
     }
     
-	//vga_init(fb_addr, fb_width_local, fb_height_local, fb_pitch_local);
+    vga_clear_screen(VGA_BLACK);
+    klog_init(VGA_WHITE, VGA_BLACK);
+    
+    klog_info("Initializing GDT...");
+    gdt_init();
+    klog_status(LOG_SUCCESS);
+    
+    klog_info("Initializing IDT...");
+    idt_init();
+    klog_status(LOG_SUCCESS);
 
-	vga_clear_screen(0x0000000F);
+    klog_info("Initializing PIC...");    
+    init_pic();
+    klog_status(LOG_SUCCESS);
 
-	vga_print("Loaded kernel\n",0x00FFFFFF, 0);
+    klog_info("Initializing system allocator...");
+    init_bitmap_allocator(mbi_addr);
+    klog_status(LOG_SUCCESS);
 
-	//terminal_initialize();
+    klog_info("Initalizing paging...");
+    init_paging((uint32_t)fb_addr, fb_pitch_local, fb_height_local);            
+    klog_status(LOG_SUCCESS);
 
-	//lprintkl("Loading GDT.");
+    klog_info("Initalizing FAT32 driver...");
+    uint32_t root_cluster = init_fat32();
+    
+    if (root_cluster == 0) {
+        klog_status(LOG_FAILED);
+        return;
+    }
+    klog_status(LOG_SUCCESS);
+    
+    // --------------------------------------------------
+    // TEST 1: Resolve root directory
+    // --------------------------------------------------
+    klog_info("FAT32 root resolution test...");
+    struct fat32_file_info info;
+    if (fat32_resolve_path("/", root_cluster, &info)) {
+        klog_status(LOG_SUCCESS);
+    } else {
+        klog_status(LOG_FAILED);
+        return;
+    }
+    
+    // --------------------------------------------------
+    // TEST 2: Resolve a DIRECTORY
+    // --------------------------------------------------
+    klog_info("FAT32 directory resoultion test...");
+    if (fat32_resolve_path("/BOOT", root_cluster, &info)) {
+        if (info.is_directory) {
+            klog_status(LOG_SUCCESS);
+        } else {
+            klog_status(LOG_FAILED);
+            return;
+        }
+    } else {
+        klog_status(LOG_FAILED);
+        return;
+    }
+    
+    // --------------------------------------------------
+    // TEST 3: Resolve a FILE
+    // --------------------------------------------------
+    klog_info("FAT32 file resolution test...");
+    if (fat32_resolve_path("/BOOT/SELFTEST.SYS", root_cluster, &info)) {
+        klog_status(LOG_SUCCESS);
+        klog_info("FAT32 file read test...");
+        if (info.is_directory) {
+            klog_status(LOG_FAILED);
+            return;
+        }
+        klog_status(LOG_SUCCESS);
+        klog_info("FAT32 file contents test...");
+    
+        // --------------------------------------------------
+        // TEST 4: Read file contents
+        // --------------------------------------------------
+        void *file_data = fat32_read_file(info.first_cluster, info.size);
+        if (file_data) {
+            char *text = (char *)file_data;
 
-	gdt_init();
-	
-	vga_print("initialized gdt\n",0x00FFFFFF,0);
-	
-	//lprintkl("Loaded GDT, now loading IDT.");
+            // Using your updated file-reader setup with null-termination
+            if (strcmp("INFO\x0A", text) == 0) {
+                klog_status(LOG_SUCCESS);
+            } else {
+                klog_status(LOG_FAILED);
+                kfree(file_data);
+                return;
+            }
+            kfree(file_data);
+        } else {
+            klog_status(LOG_FAILED);
+            return;
+        }
+    } else {
+        klog_status(LOG_FAILED);
+        return;
+    }
 
-	idt_init();
+    // --------------------------------------------------
+    // TEST 5: Invalid path
+    // --------------------------------------------------
+    klog_info("FAT32 path resolution rejection test...");
+    if (!fat32_resolve_path("/THIS_DOES_NOT_EXIST.TXT", root_cluster, &info)) {
+        klog_status(LOG_SUCCESS);
+    } else {
+        klog_status(LOG_FAILED);
+        return;
+    }
+    
+    // --------------------------------------------------
+    // INTERACTIVE SHELL PIPELINE START
+    // --------------------------------------------------
+// --------------------------------------------------
+    // INTERACTIVE SHELL PIPELINE START
+    // --------------------------------------------------
+    vga_print("\n--- All tests passed! Entering OS Shell ---\n\n", 0x00FF00FF, VGA_BLACK);
 
-	vga_print("initialized idt\n",0x00FFFFFF,0);
+    // 1. Clear out any junk inside the keyboard hardware controller buffer
+    inb(0x60); 
 
-	init_pic();
+    // 2. Open the CPU interrupt gates so IRQ1/Interrupt 33 can start executing
+    __asm__ volatile("sti");
 
-	vga_print("initialized pic\n",0x00FFFFFF,0);
+    char cmd_buffer[64];
 
-	//lprintkl("Loaded IDT and PICs");
+    // Stateful Navigation: Default our working path directory to the root cluster
+    uint32_t current_dir_cluster = root_cluster;
 
-	//lprintkl("parsing multiboot2 headers");
+    while (1) {
+        // Print shell prompt
+        vga_print("my_kernel> ", 0x00FFFF00, VGA_BLACK);
+        
+        // This blocks internally, tracking backspaces and echoes to VGA
+        kernel_read_line(cmd_buffer, 64); 
+        
+        // Command Execution parsing
+        if (strcmp("help", cmd_buffer) == 0) {
+            vga_print("Available commands: help, clear, ls, cd, cat\n", VGA_WHITE, VGA_BLACK);
+        } 
+        else if (strcmp("clear", cmd_buffer) == 0) {
+            vga_clear_screen(VGA_BLACK);
+            vga_set_cursor(0, 0); // Reset text rendering positions to the top left
+        } 
+        // --- 1. LS Command (Handles current directory & arguments) ---
+        else if (strcmp("ls", cmd_buffer) == 0 || strncmp("ls ", cmd_buffer, 3) == 0) {
+            uint32_t target_cluster = current_dir_cluster;
+            int path_valid = 1;
 
+            // If a path argument was supplied (e.g. "ls /BOOT" or "ls BOOT")
+            if (strncmp("ls ", cmd_buffer, 3) == 0) {
+                char *path_arg = cmd_buffer + 3;
+                struct fat32_file_info ls_target_info;
 
+                // Resolve path using our current context directory as base
+                if (fat32_resolve_path(path_arg, current_dir_cluster, &ls_target_info)) {
+                    if (ls_target_info.is_directory) {
+                        target_cluster = ls_target_info.first_cluster;
+                    } else {
+                        vga_print("ls: Error: Target is a file, not a directory.\n", 0xFF0000FF, VGA_BLACK);
+                        path_valid = 0;
+                    }
+                } else {
+                    vga_print("ls: Error: Directory not found.\n", 0xFF0000FF, VGA_BLACK);
+                    path_valid = 0;
+                }
+            }
 
-	init_bitmap_allocator(mbi_addr);
+            if (path_valid) {
+                // Fetch valid entries using your fat32 directory listing function
+                struct fat32_dir_listing *list = fat32_list_directory(target_cluster);
+                if (list != NULL) {
+                    for (uint32_t i = 0; i < list->count; i++) {
+                        if (list->entries[i].is_directory) {
+                            vga_print("[DIR]  ", 0x0000FFFF, VGA_BLACK); // Render directories in Blue
+                            vga_print(list->entries[i].name, VGA_WHITE, VGA_BLACK);
+                        } else {
+                            vga_print("[FILE] ", 0x00FF00FF, VGA_BLACK); // Render files in Green
+                            vga_print(list->entries[i].name, VGA_WHITE, VGA_BLACK);
+                        }
+                        vga_print("\n", VGA_WHITE, VGA_BLACK);
+                    }
+                    // Clean up dynamic heap allocations using your native tracking method
+                    fat32_free_dir_listing(list);
+                } else {
+                    vga_print("ls: Error reading target directory directory map.\n", 0xFF0000FF, VGA_BLACK);
+                }
+            }
+        }
+        // --- 2. CD Command (Stateful traversal) ---
+        else if (strncmp("cd ", cmd_buffer, 3) == 0) {
+            char *path_arg = cmd_buffer + 3;
 
-	vga_print("initalized bitmap allocator\n", 0x00FFFFFF, 0);
+            // Special case shortcut: "cd /" resets to root directory
+            if (strcmp("/", path_arg) == 0) {
+                current_dir_cluster = root_cluster;
+            } else {
+                struct fat32_file_info cd_target_info;
 
-	init_paging((uint32_t)fb_addr, fb_pitch_local, fb_height_local);			
-
-	vga_print("initialized allocator and paging\n",0x00FFFFFF,0);
-
-	inb(0x60); // Read and discard whatever is currently in the buffer
-	__asm__ volatile("sti"); // Now safely open the interrupt floodgates!
-	
-
-	// Map virtual 0xC00B8000 directly to the physical VGA text buffer
-	//map_page((void*)0xC00B8000, (void*)0xB8000, PAGE_PRESENT | PAGE_WRITE);
-	
-	// Now writing here safely displays text on screen through the paging system
-	//uint16_t *vga_buffer = (uint16_t *)0xC00B8000;
-	//vga_buffer[0] = (0x0F << 8) | 'X'; // White text 'X' on black background
-	
-	//int *array1 = (int *)kmalloc(10 * sizeof(int));
-    //array1[0] = 42;
-    //array1[9] = 99;
-
-    // Test 2: Triggering dynamic page expansion by asking for a large block
-    //void *large_buffer = kmalloc(8000); // Exceeds a single 4KB page
-
-
-    // Test 3: Freeing memory and ensuring coalescing works
-    //kfree(array1);
-	//kfree(large_buffer);
-
-//	__asm__ volatile("sti");
-
-//	lprintkl("Os is now taking input, type something:");	
-	/*
-	
-	lprintkl("=== FAT32 PATH RESOLVER TEST ===");
-	
-	// Initialize FAT32 and get root cluster
-	uint32_t root_cluster = init_fat32();
-	
-	if (root_cluster == 0) {
-	    lprintkl("FAT32 init failed!");
-	    return;
-	}
-	
-	lprintkl("FAT32 initialized successfully.");
-	
-	
-	// --------------------------------------------------
-	// TEST 1: Resolve root directory
-	// --------------------------------------------------
-	
-	struct fat32_file_info info;
-	
-	if (fat32_resolve_path("/", root_cluster, &info)) {
-	    lprintkl("Resolved root directory successfully.");
-	} else {
-	    lprintkl("FAILED: Could not resolve root directory.");
-	}
-	
-	
-	// --------------------------------------------------
-	// TEST 2: Resolve a DIRECTORY
-	// CHANGE THIS TO A REAL DIRECTORY YOU HAVE
-	// --------------------------------------------------
-	
-	if (fat32_resolve_path("/BOOT", root_cluster, &info)) {
-	
-	    lprintkl("Resolved directory:");
-	
-	    lprintk("Name: ");
-	    lprintkl(info.name);
-	
-	    lprintk("Cluster: ");
-	    // Replace with your integer print if available
-	    lprintkl("(cluster resolved)");
-	
-	    if (info.is_directory) {
-	        lprintkl("Confirmed directory.");
-	    } else {
-	        lprintkl("ERROR: Expected directory but got file.");
-	    }
-	
-	} else {
-	    lprintkl("FAILED: Could not resolve /BOOT");
-	}
-	
-	
-	// --------------------------------------------------
-	// TEST 3: Resolve a FILE
-	// CHANGE THIS TO A REAL FILE YOU HAVE
-	// --------------------------------------------------
-	
-	if (fat32_resolve_path("/BOOT/TEST.TXT", root_cluster, &info)) {
-	
-	    lprintkl("Resolved file:");
-	
-	    lprintk("Name: ");
-	    lprintkl(info.name);
-	
-	    if (!info.is_directory) {
-	        lprintkl("Confirmed regular file.");
-	    } else {
-	        lprintkl("ERROR: Expected file but got directory.");
-	    }
-	
-	    // --------------------------------------------------
-	    // TEST 4: Read file contents
-	    // --------------------------------------------------
-	
-	    void *file_data = fat32_read_file(info.first_cluster, info.size);
-	
-	    if (file_data) {
-	
-	        lprintkl("Successfully read file contents.");
-	
-	        // Print first 64 bytes as characters
-	        // Useful for text files
-	        char *text = (char *)file_data;
-	
-	        lprintkl("First bytes:");
-	
-	        for (uint32_t i = 0; i < 64 && i < info.size; i++) {
-	
-	            char c = text[i];
-	
-	            // Replace non-printable chars
-	            if (c < 32 || c > 126) {
-	                c = '.';
-	            }
-	
-	            terminal_putchar(c);
-	        }
-	
-	        terminal_putchar('\n');
-	
-	        kfree(file_data);
-	
-	    } else {
-	        lprintkl("FAILED: Could not read file.");
-	    }
-	
-	} else {
-	    lprintkl("FAILED: Could not resolve /KERNEL.BIN");
-	}
-	
-	
-	// --------------------------------------------------
-	// TEST 5: Invalid path
-	// --------------------------------------------------
-	
-	if (!fat32_resolve_path("/THIS_DOES_NOT_EXIST.TXT", root_cluster, &info)) {
-	    lprintkl("Correctly rejected invalid path.");
-	} else {
-	    lprintkl("ERROR: Invalid path unexpectedly resolved.");
-	}
-	
-	lprintkl("=== FAT32 TEST COMPLETE ===");
-	*/	
-	// early kernel panic test
-	//__asm__ volatile("xor %eax, %eax; div %eax"); 
-
-
+                if (fat32_resolve_path(path_arg, current_dir_cluster, &cd_target_info)) {
+                    if (cd_target_info.is_directory) {
+                        current_dir_cluster = cd_target_info.first_cluster;
+                    } else {
+                        vga_print("cd: Error: Target is a file, not a directory.\n", 0xFF0000FF, VGA_BLACK);
+                    }
+                } else {
+                    vga_print("cd: Error: No such directory exists.\n", 0xFF0000FF, VGA_BLACK);
+                }
+            }
+        }
+        // --- 3. CAT Command (Aware of context directory cluster) ---
+        else if (strncmp("cat ", cmd_buffer, 4) == 0) {
+            char* filename = cmd_buffer + 4; 
+            
+            struct fat32_file_info cat_info;
+            // Updated to use current_dir_cluster instead of hardcoded root_cluster
+            if (fat32_resolve_path(filename, current_dir_cluster, &cat_info)) {
+                if (!cat_info.is_directory) {
+                    void *cat_data = fat32_read_file(cat_info.first_cluster, cat_info.size);
+                    if (cat_data) {
+                        vga_print((char *)cat_data, VGA_WHITE, VGA_BLACK);
+                        vga_print("\n", VGA_WHITE, VGA_BLACK);
+                        kfree(cat_data);
+                    } else {
+                        vga_print("Error: Could not read file content.\n", 0xFF0000FF, VGA_BLACK);
+                    }
+                } else {
+                    vga_print("Error: Target path is a directory, not a file.\n", 0xFF0000FF, VGA_BLACK);
+                }
+            } else {
+                vga_print("Error: File not found.\n", 0xFF0000FF, VGA_BLACK);
+            }
+        } 
+        else if (cmd_buffer[0] != '\0') {
+            vga_print("Unknown Command. Type 'help' for options.\n", 0xFF0000FF, VGA_BLACK);
+        }
+    }
 	
 
-
-		
-
-    // Halt
-	
-    return;
+    // Safety fallback halt loop if loop ever unbends
+    while(1) {
+        __asm__ volatile("hlt");
+    }
 }
-
-

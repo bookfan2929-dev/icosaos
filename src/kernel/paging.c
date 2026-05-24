@@ -105,3 +105,17 @@ int map_page(void *virtual_addr, void *physical_addr, uint32_t flags) {
 
     return 1; // Success!
 }
+
+void unmap_page(void *virtual_addr) {
+    uint32_t virt = (uint32_t)virtual_addr;
+    uint32_t pd_index = virt >> 22;
+    uint32_t pt_index = (virt >> 12) & 0x3FF;
+
+    if ((page_directory[pd_index] & PAGE_PRESENT) != 0) {
+        uint32_t *page_table = (uint32_t *)(page_directory[pd_index] & ~0xFFF);
+        page_table[pt_index] = 0; // Clear the entry (marks it as not present)
+        
+        // Flush the Translation Lookaside Buffer (TLB) for this page
+        __asm__ volatile("invlpg (%0)" : : "r" (virt) : "memory");
+    }
+}

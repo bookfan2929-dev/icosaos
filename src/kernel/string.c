@@ -55,3 +55,19 @@ int strcmp(const char *a, const char *b) {
 
     return (unsigned char)*a - (unsigned char)*b;
 }
+
+
+int strncmp(const char *s1, const char *s2, size_t n) {
+    while (n > 0) {
+        if (*s1 != *s2) {
+            return (unsigned char)*s1 - (unsigned char)*s2;
+        }
+        if (*s1 == '\0') {
+            return 0; // Both are null terminators because *s1 == *s2
+        }
+        s1++;
+        s2++;
+        n--;
+    }
+    return 0; // n characters compared and they all matched
+}

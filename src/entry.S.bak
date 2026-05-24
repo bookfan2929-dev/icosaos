@@ -1,0 +1,165 @@
+# =========================
+# MULTIBOOT HEADER (UNCHANGED)
+# =========================
+.section .multiboot_header, "a"
+.balign 8
+
+multiboot_header:
+    .long 0xE85250D6
+    .long 0
+    .long multiboot_header_end - multiboot_header
+    .long -(0xE85250D6 + 0 + (multiboot_header_end - multiboot_header))
+
+.balign 8
+.word 5
+.word 0
+.long 20
+.long 1024
+.long 768
+.long 32
+
+.balign 8
+.word 0
+.word 0
+.long 8
+
+multiboot_header_end:
+
+# =========================
+# CODE
+# =========================
+.section .text
+.global _start
+.type _start, @function
+
+_start:
+    cli
+
+    # Save multiboot info BEFORE we destroy registers
+    mov %eax, multiboot_magic
+    mov %ebx, multiboot_info
+
+    # Temporary stack (32-bit)
+    mov $stack_top, %esp
+
+    # Load GDT
+
+	lgdt gdt_descriptor
+	
+	mov $0x10, %ax
+	mov %ax, %ds
+	mov %ax, %es
+	mov %ax, %ss
+
+    # =========================
+    # SETUP PAGE TABLES
+    # =========================
+
+    # Zero page tables
+    mov $pml4_table, %edi
+    mov $4096*3/4, %ecx
+    xor %eax, %eax
+    rep stosl
+
+    # PML4[0] → PDPT
+    mov $pdpt_table, %eax
+    or $0x3, %eax
+    mov %eax, pml4_table
+
+    # PDPT[0] → PD
+    mov $pd_table, %eax
+    or $0x3, %eax
+    mov %eax, pdpt_table
+
+    # Identity map first 2MB using 2MB pages
+    mov $pd_table, %edi
+	mov $0x83, %eax
+	mov %eax, (%edi)
+    # =========================
+    # ENABLE LONG MODE
+    # =========================
+
+    # Enable PAE (CR4)
+    mov %cr4, %eax
+    or $(1 << 5), %eax
+    mov %eax, %cr4
+
+    # Load PML4 into CR3
+    mov $pml4_table, %eax
+    mov %eax, %cr3
+
+    # Enable LME (EFER MSR)
+    mov $0xC0000080, %ecx
+    rdmsr
+    or $(1 << 8), %eax
+    wrmsr
+
+    # Enable paging (CR0)
+    mov %cr0, %eax
+    or $(1 << 31), %eax
+    mov %eax, %cr0
+
+    # =========================
+    # FAR JUMP TO 64-BIT
+    # =========================
+    ljmp $0x08, $long_mode_entry
+
+
+# =========================
+# 64-BIT CODE
+# =========================
+.code64
+long_mode_entry:
+    # Set up 64-bit stack
+	mov $0x10, %ax
+	mov %ax, %ds
+	mov %ax, %es
+	mov %ax, %ss
+
+    mov $stack_top, %rsp
+
+    # Pass arguments (SysV ABI)
+    mov multiboot_magic(%rip), %rdi
+    mov multiboot_info(%rip), %rsi
+
+    call kernel_main_64
+
+.hang:
+    hlt
+    jmp .hang
+
+.section .rodata
+gdt:
+    .quad 0x0000000000000000   # null
+    .quad 0x00209A0000000000   # 64-bit code
+    .quad 0x0000920000000000   # data
+
+gdt_end:
+gdt_descriptor:
+    .word gdt_end - gdt - 1
+    .quad gdt
+
+
+
+# =========================
+# DATA
+# =========================
+.section .bss
+.balign 4096
+
+pml4_table:
+    .skip 4096
+pdpt_table:
+    .skip 4096
+pd_table:
+    .skip 4096
+
+multiboot_magic:
+    .long 0
+multiboot_info:
+    .long 0
+
+.balign 16
+stack_bottom:
+    .skip 16384
+stack_top:

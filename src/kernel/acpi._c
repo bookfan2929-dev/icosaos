@@ -1,0 +1,120 @@
+#include "headers/acpi.h"
+
+// External kernel utilities (adjust names according to your codebase)
+extern void kprintf(const char* format, ...);
+extern void kpanic(const char* message);
+
+/**
+ * @brief Validates the simple two's complement checksum used by ACPI tables.
+ */
+bool acpi_validate_checksum(const void* address, size_t length) {
+    const uint8_t* byte_ptr = (const uint8_t*)address;
+    uint8_t sum = 0;
+
+    for (size_t i = 0; i < length; i++) {
+        sum += byte_ptr[i];
+    }
+
+    return (sum == 0);
+}
+
+/**
+ * @brief Scans physical memory ranges for the ACPI 1.0 RSDP signature.
+ * * In standard x86 systems, the RSDP is located either within the first 1KB 
+ * of the Extended BIOS Data Area (EBDA), or within the BIOS read-only memory 
+ * space between 0x000E0000 and 0x000FFFFF on strict 16-byte boundaries.
+ */
+acpi_rsdp_t* acpi_find_rsdp(void) {
+    uintptr_t bios_region_start = 0x000E0000;
+    uintptr_t bios_region_end   = 0x000FFFFF;
+
+    // Note: If your kernel maps physical memory to a high-half offset (e.g. 0xC0000000 or 0xFFFFFFFF80000000), 
+    // add your virtual base offset to `phys` before evaluating the pointer.
+    for (uintptr_t phys = bios_region_start; phys < bios_region_end; phys += 16) {
+        char* candidate = (char*)phys;
+        
+        // Match the mandatory 8-byte magic string: "_ RSD PTR "
+        if (candidate[0] == '_' && candidate[1] == ' ' && candidate[2] == 'R' && candidate[3] == 'S' &&
+            candidate[4] == 'D' && candidate[5] == ' ' && candidate[6] == 'P' && candidate[7] == 'T') {
+            
+            acpi_rsdp_t* rsdp = (acpi_rsdp_t*)phys;
+            if (acpi_validate_checksum(rsdp, sizeof(acpi_rsdp_t))) {
+                return rsdp;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+/**
+ * @brief Initializes the ACPI subsystem, parses the RSDT, and enumerates physical tables.
+ */
+void acpi_init(void) {
+    kprintf("ACPI: Initializing ACPI 1.0 Subsystem...\\n");
+
+    acpi_rsdp_t* rsdp = acpi_find_rsdp();
+    if (!rsdp) {
+        kprintf("ACPI: Warning - RSDP signature not found via manual BIOS scan.\\n");
+        return;
+    }
+
+    kprintf("ACPI: Found RSDP at physical address 0x%x. Revision: %d\\n", (uint32_t)(uintptr_t)rsdp, rsdp->revision);
+
+    // Map the initial RSDT header to safe virtual space to figure out its actual size
+    acpi_header_t* rsdt_header = (acpi_header_t*)kmap_physical(rsdp->rsdt_address, 1);
+    if (!rsdt_header) {
+        kpanic("ACPI: Failed to map initial RSDT header!");
+    }
+
+    // Explicitly verify the table tag
+    if (rsdt_header->signature[0] != 'R' || rsdt_header->signature[1] != 'S' ||
+        rsdt_header->signature[2] != 'D' || rsdt_header->signature[3] != 'T') {
+        kpanic("ACPI: Invalid signature header - Expected 'RSDT'!");
+    }
+
+    uint32_t rsdt_length = rsdt_header->length;
+    kunmap_virtual(rsdt_header, 1); // Recycle the initial transient window
+
+    // Re-map the full footprint dynamically calculated from the header length
+    size_t pages_needed = (rsdt_length + 4095) / 4096;
+    acpi_rsdt_t* rsdt = (acpi_rsdt_t*)kmap_physical(rsdp->rsdt_address, pages_needed);
+
+    // Verify compliance of root table contents
+    if (!acpi_validate_checksum(rsdt, rsdt->header.length)) {
+        kpanic("ACPI: RSDT checksum verification failed!");
+    }
+
+    // Pointers follow directly after the 36-byte base header layout
+    size_t num_entries = (rsdt->header.length - sizeof(acpi_header_t)) / sizeof(uint32_t);
+    kprintf("ACPI: RSDT contains %d sub-table descriptors.\\n", (int)num_entries);
+
+    for (size_t i = 0; i < num_entries; i++) {
+        uint32_t table_phys = rsdt->table_pointers[i];
+        if (table_phys == 0) continue;
+
+        // Briefly peek inside child header signature metadata
+        acpi_header_t* child_header = (acpi_header_t*)kmap_physical(table_phys, 1);
+        if (!child_header) continue;
+
+        char sig[5] = {
+            child_header->signature[0],
+            child_header->signature[1],
+            child_header->signature[2],
+            child_header->signature[3],
+            '\\0'
+        };
+
+        kprintf("ACPI: Discovered Table [%s] at Phys: 0x%x (%d Bytes)\\n", 
+                sig, table_phys, child_header->length);
+
+        // Architectural Extensions Hooks placement:
+        // if (strcmp(sig, "APIC") == 0) { parse_madt(table_phys); }
+        // if (strcmp(sig, "FACP") == 0) { parse_fadt(table_phys); }
+
+        kunmap_virtual(child_header, 1);
+    }
+
+    // Clean up or cache this based on whether you plan to trace variables out of the RSDT later
+    kunmap_virtual(rsdt, pages_needed);
+}
