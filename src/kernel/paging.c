@@ -33,11 +33,11 @@ void init_paging(uint32_t fb_phys_addr, uint32_t fb_pitch_bytes, uint32_t fb_hei
     // 3. Identity map the first 4MB page-by-page
     for (uint32_t i = 0; i < 1024; i++) {
         uint32_t physical_address = i * PAGE_SIZE;
-        first_page_table[i] = physical_address | PAGE_PRESENT | PAGE_WRITE;
+        first_page_table[i] = physical_address | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
     }
 
     // 4. Place our first Page Table into the very first slot of the Page Directory
-    page_directory[0] = ((uint32_t)first_page_table) | PAGE_PRESENT | PAGE_WRITE;
+    page_directory[0] = ((uint32_t)first_page_table) | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
 
     // ==========================================
     // FIX: IDENTITY-MAP THE VGA FRAMEBUFFER PAGES
@@ -53,7 +53,7 @@ void init_paging(uint32_t fb_phys_addr, uint32_t fb_pitch_bytes, uint32_t fb_hei
             // Map the virtual address identically to the physical address.
             // We use PAGE_PRESENT | PAGE_WRITE.
             // (Optional: you can bitwise-OR 0x10 to set the PCD cache-disable bit)
-            map_page((void*)current_addr, (void*)current_addr, PAGE_PRESENT | PAGE_WRITE);
+            map_page((void*)current_addr, (void*)current_addr, PAGE_PRESENT | PAGE_WRITE );
         }
     }
 

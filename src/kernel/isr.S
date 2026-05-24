@@ -103,22 +103,34 @@ keyboard_gate:
 
 # --- User System Call Wrapper ---
 .global syscall_isr_wrapper
+.extern c_syscall_handler
+
 syscall_isr_wrapper:
+    # 1. Save all registers atomically in the correct order
     pushal
+    
+    # 2. Save data segments
     pushl %ds
     pushl %es
     pushl %fs
     pushl %gs
 
+    # 3. Secure kernel execution segments
     mov $0x10, %ax
     mov %ax, %ds
     mov %ax, %es
-    
+
+    # 4. Execute your actual C logic handler
     call c_syscall_handler
 
+    # 5. Restore segments
     popl %gs
     popl %fs
     popl %es
     popl %ds
+    
+    # 6. Restore general purpose registers
     popal
+    
+    # 7. Safely step back into Ring 3 user space
     iretl

@@ -13,6 +13,49 @@
 #include "headers/vga_cosmetics.h"
 #include "headers/klog.h"
 #include "headers/keyboard.h" // Added our new keyboard header
+#include "headers/tss.h"
+#include "headers/tasks.h"
+
+// Allocate a clean 4 KiB stack buffer for the program to use while in Ring 3
+uint8_t user_stack_buffer[4096]; 
+
+void dummy_user_program(void) {
+    while(1) {
+        // Run your verified system call inline!
+        asm volatile("int $0x40");
+        
+        // Waste some time so you can see the prints repeating
+        for(volatile int i = 0; i < 10000000; i++);
+    }
+}
+
+void start_first_process(void) {
+    // 1. Forge the process stack using the 'create_user_process' function we designed
+    // We pass the entry point and the top of our user stack buffer
+    uint32_t ustack_top = (uint32_t)&user_stack_buffer[4096];
+    process_t* proc1 = create_user_process(&dummy_user_program, ustack_top);
+	
+    // 2. Point our global execution tracker to this process
+    current_process = proc1;
+
+    // 3. Update the TSS kernel stack pointer!
+    // When this user task eventually gets interrupted by the timer, 
+    // the CPU will look here to find where its Ring 0 stack begins.
+    tss_entry.esp0 = proc1->kernel_stack_top + sizeof(cpu_context_t);
+
+    // 4. THE JUMP TO USER MODE
+    // We manually assign the CPU's stack pointer to our forged frame and simulate an interrupt return
+    asm volatile(
+        "movl %0, %%esp\n" // Move ESP to point directly to our forged registers
+        "popl %%gs\n"      // Pop forged data segments
+        "popl %%fs\n"
+        "popl %%es\n"
+        "popl %%ds\n"
+        "popal\n"          // Pop forged general-purpose registers
+        "iretl\n"          // Pop EIP, CS, EFLAGS, ESP, and SS all at once!
+        : : "r"(proc1->kernel_stack_top)
+    );
+}
 
 // Multiboot2 tag header structure
 struct multiboot_tag {
@@ -329,6 +372,7 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr) {
         }
     }
 	*/	
+	start_first_process();
 
     // Safety fallback halt loop if loop ever unbends
     while(1) {
