@@ -37,6 +37,8 @@ tss_entry_t tss_entry;
 
 extern void gdt_flush(uint32_t);
 
+
+
 // FIX 1: Expand the array from 3 to 6 to safely hold your user segments and TSS
 gdt_entry_t gdt[6];
 gdt_ptr_t gdt_ptr;
@@ -111,3 +113,47 @@ void gdt_init(void) {
     // Safely load the TSS into the task register now that space exists!
     flush_tss();
 }
+
+
+// TSS code
+
+typedef struct {
+    uint32_t edi, esi, ebp, esp, ebx, edx, ecx, eax; // Pushed by 'pushad'
+    uint32_t gs, fs, es, ds;                         // Data segments
+    uint32_t eip, cs, eflags, user_esp, user_ss;     // Pushed automatically by CPU on interrupt
+} __attribute__((packed)) cpu_context_t;
+
+typedef struct process {
+    int pid;
+    uint32_t page_directory;    // CR3 value for virtual memory separation
+    uint32_t kernel_stack_top;  // The base of this process's unique kernel stack
+    cpu_context_t* context;     // Pointer to the saved registers on the stack
+    struct process* next;       // Next process in the ready queue
+} process_t;
+
+
+
+process_t* current_process;
+
+uint32_t c_scheduler_handler(uint32_t old_esp) {
+    // Save the stack pointer to the old process
+/*    current_process->context = (cpu_context_t*)old_esp;
+
+    // Pick the next process to run (Simple Round-Robin example)
+    current_process = current_process->next;
+
+    // CRUCIAL: Update the TSS so the NEXT interrupt uses this 
+    // new process's clean kernel stack, not the old one.
+    tss_entry.esp0 = current_process->kernel_stack_top;
+
+    // If you are using paging per-process, update CR3 here:
+    // asm volatile("mov %0, %%cr3" : : "r"(current_process->page_directory));
+*/
+    // Acknowledge the PIC/APIC timer interrupt interrupt here
+    // outb(0x20, 0x20);
+
+    // Return the new stack pointer back to the assembly wrapper
+    //return (uint32_t)current_process->context;
+	return old_esp;
+}
+

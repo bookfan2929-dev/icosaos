@@ -213,6 +213,8 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr) {
     // 2. Open the CPU interrupt gates so IRQ1/Interrupt 33 can start executing
     __asm__ volatile("sti");
 
+	__asm__ volatile("int $0x40");
+	/*
     char cmd_buffer[64];
 
     // Stateful Navigation: Default our working path directory to the root cluster
@@ -326,7 +328,7 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr) {
             vga_print("Unknown Command. Type 'help' for options.\n", 0xFF0000FF, VGA_BLACK);
         }
     }
-	
+	*/	
 
     // Safety fallback halt loop if loop ever unbends
     while(1) {

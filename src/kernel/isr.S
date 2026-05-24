@@ -1,59 +1,124 @@
-.global exception_gate_32
+.code32
+
 .extern exception_handler_32
-.global keyboard_gate
 .extern keyboard_handler
+.extern c_syscall_handler
 
-exception_gate_32:
-    # 1. Save all general-purpose registers (EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI)
-    # pushal pushes 32 bytes to the stack in this exact order:
-    # EAX, ECX, EDX, EBX, original ESP, EBP, ESI, EDI
+# --- Exception Stub Macros ---
+.macro ISR_NOERRINDEX index
+.global isr_err_\index
+isr_err_\index:
+    pushl $0
+    pushl $\index
+    jmp exception_common_stub
+.endm
+
+.macro ISR_ERRINDEX index
+.global isr_err_\index
+isr_err_\index:
+    pushl $\index
+    jmp exception_common_stub
+.endm
+
+# Auto-generate stubs 0-31
+ISR_NOERRINDEX 0
+ISR_NOERRINDEX 1
+ISR_NOERRINDEX 2
+ISR_NOERRINDEX 3
+ISR_NOERRINDEX 4
+ISR_NOERRINDEX 5
+ISR_NOERRINDEX 6
+ISR_NOERRINDEX 7
+ISR_ERRINDEX   8
+ISR_NOERRINDEX 9
+ISR_ERRINDEX   10
+ISR_ERRINDEX   11
+ISR_ERRINDEX   12
+ISR_ERRINDEX   13
+ISR_ERRINDEX   14
+ISR_NOERRINDEX 15
+ISR_NOERRINDEX 16
+ISR_ERRINDEX   17
+ISR_NOERRINDEX 18
+ISR_NOERRINDEX 19
+ISR_NOERRINDEX 20
+ISR_ERRINDEX   21
+ISR_NOERRINDEX 22
+ISR_NOERRINDEX 23
+ISR_NOERRINDEX 24
+ISR_NOERRINDEX 25
+ISR_NOERRINDEX 26
+ISR_NOERRINDEX 27
+ISR_NOERRINDEX 28
+ISR_NOERRINDEX 29
+ISR_ERRINDEX   30
+ISR_NOERRINDEX 31
+
+# Unified Exception Common Stub
+exception_common_stub:
     pushal
-
-    # 2. Save segment registers (zero-extended to 32 bits on stack)
     pushl %ds
     pushl %es
     pushl %fs
     pushl %gs
 
-    # 3. Pass the pointer to this entire register structure to the C function
-    # The current ESP points to the start of our saved registers on the stack.
-    # System V i386 ABI passes arguments via the stack.
+    mov $0x10, %ax
+    mov %ax, %ds
+    mov %ax, %es
+
     pushl %esp
-
-    # 4. Call the C handler
     call exception_handler_32
-
-    # 5. Clean up the argument from the stack
+    
+    # Panic screen loops indefinitely, but to preserve frame structure validation:
     addl $4, %esp
-
-    # 6. Restore segment registers
     popl %gs
     popl %fs
     popl %es
     popl %ds
-
-    # 7. Restore general-purpose registers
     popal
-
-    # 8. Return from interrupt (restores EIP, CS, EFLAGS)
+    addl $8, %esp
     iretl
 
+# --- Hardware IRQ Stubs ---
+.global keyboard_gate
 keyboard_gate:
-	pusha          # Save all general-purpose registers (EAX, ECX, EDX, EBX, ESP, EBP, ESI, EDI)
-    push %ds        # Save data segment descriptor registers
-    push %es
-    push %fs
-    push %gs
+    pushal
+    pushl %ds
+    pushl %es
+    pushl %fs
+    pushl %gs
 
-    mov %ax, 0x10   # Load kernel data segment descriptor (assumes GDT data layout index)
-    mov %ds, %ax
-    mov %es, %ax
+    mov $0x10, %ax
+    mov %ax, %ds
+    mov %ax, %es
 
-    call keyboard_handler # Execute your C logic block
+    call keyboard_handler
 
-    pop %gs         # Restore segment registers in exact reverse order
-    pop %fs
-    pop %es
-    pop %ds
-    popa           # Restore general-purpose registers
-    iretl          # Interrupt Return (32-bit pop of EIP, CS, EFLAGS)
+    popl %gs
+    popl %fs
+    popl %es
+    popl %ds
+    popal
+    iretl
+
+# --- User System Call Wrapper ---
+.global syscall_isr_wrapper
+syscall_isr_wrapper:
+    pushal
+    pushl %ds
+    pushl %es
+    pushl %fs
+    pushl %gs
+
+    mov $0x10, %ax
+    mov %ax, %ds
+    mov %ax, %es
+    
+    call c_syscall_handler
+
+    popl %gs
+    popl %fs
+    popl %es
+    popl %ds
+    popal
+    iretl

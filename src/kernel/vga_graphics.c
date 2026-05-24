@@ -16,7 +16,7 @@ static uint32_t cursor_y = 0;
 
 #define BASE_FONT_WIDTH  8
 #define BASE_FONT_HEIGHT 8
-#define SCALE_FACTOR     2
+#define SCALE_FACTOR     1
 
 // Derived sizing metrics for rendering calculations
 #define RENDER_FONT_WIDTH  (BASE_FONT_WIDTH * SCALE_FACTOR)

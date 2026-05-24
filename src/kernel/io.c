@@ -35,7 +35,7 @@ void init_pic(void) {
     outb(0xA1, 0x01);
 
     // Restore masks (or clear them to enable interrupts)
-    // For now, let's mask all interrupts EXCEPT IRQ1 (Keyboard)
-    outb(0x21, 0xFD); // 0xFD = 11111101b (Bits are inverted: 0 means enabled)
+    // Restore masks: Clear bits 0 and 1 to enable IRQ0 (Timer) and IRQ1 (Keyboard)
+    outb(0x21, 0xFC); // 0xFC = 11111100b (IRQ0 and IRQ1 enabled)
     outb(0xA1, 0xFF); // Disable all on slave PIC
 }
