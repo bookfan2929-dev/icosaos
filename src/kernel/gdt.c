@@ -1,13 +1,11 @@
 #include "headers/gdt.h"
-
 #include <stdint.h>
 
-// Ensure the compiler doesn't add padding bytes
 struct tss_entry_struct {
-    uint32_t prev_tss;   // Unused
-    uint32_t esp0;       // The kernel stack pointer to load on Ring 3 -> Ring 0 switches
-    uint32_t ss0;        // The kernel stack segment descriptor (usually 0x10)
-    uint32_t esp1;       // Unused
+    uint32_t prev_tss;
+    uint32_t esp0;       
+    uint32_t ss0;        
+    uint32_t esp1;       
     uint32_t ss1;
     uint32_t esp2;
     uint32_t ss2;
@@ -22,25 +20,25 @@ struct tss_entry_struct {
     uint32_t ebp;
     uint32_t esi;
     uint32_t edi;
-    uint32_t es;         
-    uint32_t cs;        
-    uint32_t ss;        
-    uint32_t ds;        
-    uint32_t fs;       
-    uint32_t gs;         
-    uint32_t ldt;        
+    uint32_t es;
+    uint32_t cs;
+    uint32_t ss;
+    uint32_t ds;
+    uint32_t fs;
+    uint32_t gs;
+    uint32_t ldt;
     uint16_t trap;
-    uint16_t iomap_base; // Point this beyond the limit string if not using IO bitmaps
+    uint16_t iomap_base; 
 } __attribute__((packed));
 
 typedef struct tss_entry_struct tss_entry_t;
 
-// Define a global instance of your TSS
 tss_entry_t tss_entry;
 
 extern void gdt_flush(uint32_t);
 
-gdt_entry_t gdt[3];
+// FIX 1: Expand the array from 3 to 6 to safely hold your user segments and TSS
+gdt_entry_t gdt[6];
 gdt_ptr_t gdt_ptr;
 
 static void gdt_set_gate(
@@ -63,72 +61,53 @@ static void gdt_set_gate(
 }
 
 void write_tss(int32_t num, uint16_t ss0, uint32_t esp0) {
-    // 1. Calculate the base and limit of our TSS structure
     uint32_t base = (uint32_t) &tss_entry;
     uint32_t limit = sizeof(tss_entry) - 1;
 
-    // 2. Add the TSS descriptor to the GDT
-    // Access: 0x89 (Present, Ring 0 DPL, Type: 32-bit Available TSS)
-    // Granularity: 0x00 (Byte granularity, since the size is tiny)
     gdt_set_gate(num, base, limit, 0x89, 0x00);
 
-    // 3. Clear the TSS memory space
     for(int i = 0; i < sizeof(tss_entry); i++) {
         ((char*)&tss_entry)[i] = 0;
     }
 
-    // 4. Set up the crucial privilege switch parameters
-    tss_entry.ss0 = ss0;   // Your kernel data segment selector (e.g., 0x10)
-    tss_entry.esp0 = esp0; // The top of your kernel stack space
-    
-    // Effectively disables the I/O port bitmap protection check
-    tss_entry.iomap_base = sizeof(tss_entry); 
+    tss_entry.ss0 = ss0;   
+    tss_entry.esp0 = esp0; 
+    tss_entry.iomap_base = sizeof(tss_entry);
 }
 
 void flush_tss() {
-    // 0x28 is the byte offset/selector for GDT entry index 5
     asm volatile("ltr %%ax" : : "a" (0x28));
 }
 
 extern uint32_t stack_top;
 
 void gdt_init(void) {
-    gdt_ptr.limit = (sizeof(gdt_entry_t) * 3) - 1;
+    // FIX 2: Change the limit multiplier from 3 to 6 so the CPU tracks the whole table
+    gdt_ptr.limit = (sizeof(gdt_entry_t) * 6) - 1;
     gdt_ptr.base = (uint32_t)&gdt;
 
-    // Null segment
+    // 0: Null segment
     gdt_set_gate(0, 0, 0, 0, 0);
 
-    // Kernel code segment
-    gdt_set_gate(
-        1,
-        0,
-        0xFFFFFFFF,
-        0x9A,
-        0xCF
-    );
+    // 1: Kernel code segment (0x08)
+    gdt_set_gate(1, 0, 0xFFFFFFFF, 0x9A, 0xCF);
 
-    // Kernel data segment
-    gdt_set_gate(
-        2,
-        0,
-        0xFFFFFFFF,
-        0x92,
-        0xCF
-    );
+    // 2: Kernel data segment (0x10)
+    gdt_set_gate(2, 0, 0xFFFFFFFF, 0x92, 0xCF);
 
-		// User Code Segment (Index 3, or whichever index matches your setup)
-	// Base: 0, Limit: 0xFFFFF, Access: 0xFA, Granularity: 0xCF
-	gdt_set_gate(3, 0, 0xFFFFF, 0xFA, 0xCF);
+    // 3: User Code Segment (0x1B)
+    gdt_set_gate(3, 0, 0xFFFFFFFF, 0xFA, 0xCF);
 
-	// User Data Segment (Index 4)
-	// Base: 0, Limit: 0xFFFFF, Access: 0xF2, Granularity: 0xCF
-	gdt_set_gate(4, 0, 0xFFFFF, 0xF2, 0xCF);
+    // 4: User Data Segment (0x23)
+    gdt_set_gate(4, 0, 0xFFFFFFFF, 0xF2, 0xCF);
 
-	write_tss(5, 0x10, stack_top);
-    
+    // 5: Task State Segment (0x28)
+    // FIX 3: Cast the address of stack_top explicitly to uint32_t
+    write_tss(5, 0x10, (uint32_t)&stack_top);
 
+    // Load the GDT descriptor pointer into the CPU
     gdt_flush((uint32_t)&gdt_ptr);
 
+    // Safely load the TSS into the task register now that space exists!
     flush_tss();
 }

@@ -58,4 +58,5 @@ _start:
 .balign 16
 stack_bottom:
     .skip 16384                     # 16 KiB stack
+.global stack_top
 stack_top:
