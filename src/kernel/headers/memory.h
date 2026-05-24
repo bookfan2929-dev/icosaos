@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include "paging.h"
 #include "heap.h"
+#include "user_heap.h"
 
 void init_bitmap_allocator(uint32_t mbi_addr);
 void *alloc_page(void);

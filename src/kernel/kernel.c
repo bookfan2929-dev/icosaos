@@ -15,6 +15,7 @@
 #include "headers/keyboard.h" // Added our new keyboard header
 #include "headers/tss.h"
 #include "headers/tasks.h"
+#include "headers/usermem.h"
 
 // Allocate a clean 4 KiB stack buffer for the program to use while in Ring 3
 uint8_t user_stack_buffer[4096]; 
@@ -25,34 +26,42 @@ void dummy_user_program(void) {
         asm volatile("int $0x40");
         
         // Waste some time so you can see the prints repeating
-        for(volatile int i = 0; i < 10000000; i++);
+        for(volatile int i = 0; i < 100000000; i++);
     }
 }
 
-void start_first_process(void) {
-    // 1. Forge the process stack using the 'create_user_process' function we designed
-    // We pass the entry point and the top of our user stack buffer
-    uint32_t ustack_top = (uint32_t)&user_stack_buffer[4096];
-    process_t* proc1 = create_user_process(&dummy_user_program, ustack_top);
-	
-    // 2. Point our global execution tracker to this process
-    current_process = proc1;
+void launch_isolated_user_process(void) {
+    // 1. REPLACED: Instead of allocating a kernel heap chunk for user code, 
+    // map an isolated 4KB page explicitly flagged with USER permissions (0x7)
+    allocate_user_space(USER_CODE_BASE, 1); 
 
-    // 3. Update the TSS kernel stack pointer!
-    // When this user task eventually gets interrupted by the timer, 
-    // the CPU will look here to find where its Ring 0 stack begins.
+    // 2. Safely copy your raw code bytes from kernel space into the user page
+    uint8_t *src = (uint8_t *)&dummy_user_program;
+    uint8_t *dest = (uint8_t *)USER_CODE_BASE;
+    for (int i = 0; i < 512; i++) {
+        dest[i] = src[i];
+    }
+
+    // 3. REPLACED: Allocate the dedicated User Stack using the user memory utility
+    // This cleanly assigns the page up at 0xBFFFF000 with user-accessible privileges.
+    uint32_t user_stack_top = create_user_stack(); 
+
+    // 4. Build the process frame pointing to our user land targets
+    process_t* proc1 = create_user_process((void (*)(void))USER_CODE_BASE, user_stack_top);
+    
+    current_process = proc1;
     tss_entry.esp0 = proc1->kernel_stack_top + sizeof(cpu_context_t);
 
-    // 4. THE JUMP TO USER MODE
-    // We manually assign the CPU's stack pointer to our forged frame and simulate an interrupt return
-    asm volatile(
-        "movl %0, %%esp\n" // Move ESP to point directly to our forged registers
-        "popl %%gs\n"      // Pop forged data segments
+    // 5. Plunge into Ring 3 safely!
+    __asm__ __volatile__("sti");
+    __asm__ __volatile__(
+        "movl %0, %%esp\n"
+        "popl %%gs\n"
         "popl %%fs\n"
         "popl %%es\n"
         "popl %%ds\n"
-        "popal\n"          // Pop forged general-purpose registers
-        "iretl\n"          // Pop EIP, CS, EFLAGS, ESP, and SS all at once!
+        "popal\n"
+        "iretl\n"
         : : "r"(proc1->kernel_stack_top)
     );
 }
@@ -372,7 +381,7 @@ void kernel_main(uint32_t magic, uint32_t mbi_addr) {
         }
     }
 	*/	
-	start_first_process();
+	launch_isolated_user_process();
 
     // Safety fallback halt loop if loop ever unbends
     while(1) {

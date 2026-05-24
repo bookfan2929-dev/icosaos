@@ -33,8 +33,8 @@ uint32_t c_scheduler_handler(uint32_t old_esp) {
 // This memory layout must perfectly match what our assembly wrappers pop!
 
 process_t* create_user_process(void (*entry_point)(void), uint32_t user_stack_top) {
-    process_t* new_proc = (process_t*)kmalloc(sizeof(process_t));
-    uint32_t* kstack = (uint32_t*)kmalloc(16384); 
+    process_t* new_proc = (process_t*)umalloc(sizeof(process_t));
+    uint32_t* kstack = (uint32_t*)umalloc(16384); 
     
     // Explicitly calculate the top dword alignment
     uint32_t* esp = (uint32_t*)((uint32_t)kstack + 16384);

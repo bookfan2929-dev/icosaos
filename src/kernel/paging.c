@@ -33,11 +33,11 @@ void init_paging(uint32_t fb_phys_addr, uint32_t fb_pitch_bytes, uint32_t fb_hei
     // 3. Identity map the first 4MB page-by-page
     for (uint32_t i = 0; i < 1024; i++) {
         uint32_t physical_address = i * PAGE_SIZE;
-        first_page_table[i] = physical_address | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
+        first_page_table[i] = physical_address | PAGE_PRESENT | PAGE_WRITE ;
     }
 
     // 4. Place our first Page Table into the very first slot of the Page Directory
-    page_directory[0] = ((uint32_t)first_page_table) | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
+    page_directory[0] = ((uint32_t)first_page_table) | PAGE_PRESENT | PAGE_WRITE ;
 
     // ==========================================
     // FIX: IDENTITY-MAP THE VGA FRAMEBUFFER PAGES
@@ -73,28 +73,31 @@ int map_page(void *virtual_addr, void *physical_addr, uint32_t flags) {
     uint32_t *page_table = NULL;
 
     // 2. Check if a Page Table already exists for this directory slot
-    if ((page_directory[pd_index] & PAGE_PRESENT) != 0) {
-        // Clear the attribute bits to get the raw physical address of the Page Table
-        page_table = (uint32_t *)(page_directory[pd_index] & ~0xFFF);
-    } else {
-        // The Page Table does not exist yet! We must allocate a new 4KB page for it.
-        uint32_t *new_pt = (uint32_t *)alloc_page();
-        if (!new_pt) {
-            return 0; // Out of memory! Failed to allocate management structures.
-        }
-
-        // Clear the newly allocated page table so all its entries start as "not present"
-        for (int i = 0; i < 1024; i++) {
-            new_pt[i] = 0;
-        }
-
-        // Link this new Page Table into our Master Page Directory
-        // We use PAGE_PRESENT | PAGE_WRITE so the CPU is allowed to traverse it
-        page_directory[pd_index] = ((uint32_t)new_pt) | PAGE_PRESENT | PAGE_WRITE;
-        
-        page_table = new_pt;
-    }
-
+    // Inside your map_page function in paging.c:
+	if ((page_directory[pd_index] & PAGE_PRESENT) == 0) {
+	    uint32_t *new_pt = (uint32_t *)alloc_page();
+	    if (!new_pt) {
+	        return 0;
+	    }
+	
+	    for (int i = 0; i < 1024; i++) {
+	        new_pt[i] = 0;
+	    }
+	
+	    // FIX: Include the incoming flags (or specifically mask the PAGE_USER bit)
+	    // so the directory entry matches the user/supervisor privilege requirements of the child pages!
+	    uint32_t pd_flags = PAGE_PRESENT | PAGE_WRITE | (flags & PAGE_USER);
+	    page_directory[pd_index] = ((uint32_t)new_pt) | pd_flags;
+	    
+	    page_table = new_pt;
+	} else {
+	    // If the page table already exists, ensure that if our new page demands user permissions, 
+	    // the parent directory entry is updated to allow user space parsing as well.
+	    if (flags & PAGE_USER) {
+	        page_directory[pd_index] |= PAGE_USER;
+	    }
+	    page_table = (uint32_t *)(page_directory[pd_index] & ~0xFFF);
+	}
     // 3. Insert the physical address and flags into the target Page Table entry
     // Mask the physical address with flags (ensuring the address is 4KB aligned)
     page_table[pt_index] = (phys & ~0xFFF) | flags;

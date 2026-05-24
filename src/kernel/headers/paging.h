@@ -10,5 +10,6 @@
 
 void init_paging(uint32_t fb_phys_addr, uint32_t fb_pitch_bytes, uint32_t fb_height);
 int map_page(void *virtual_addr, void *physical_addr, uint32_t flags);
+void  unmap_page(void *virtual_addr);
 
 #endif

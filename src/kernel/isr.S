@@ -56,6 +56,7 @@ ISR_NOERRINDEX 31
 
 # Unified Exception Common Stub
 exception_common_stub:
+	cli
     pushal
     pushl %ds
     pushl %es

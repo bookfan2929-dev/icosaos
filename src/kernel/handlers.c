@@ -1,6 +1,8 @@
 #include "headers/vga_graphics.h" 
 #include "headers/vga_cosmetics.h"
 #include "headers/io.h"
+#include "headers/tasks.h"
+#include "headers/usermem.h"
 
 #define RGB_WHITE 0xFFFFFF
 #define RGB_RED   0xD32F2F
@@ -115,6 +117,7 @@ void exception_handler_32(struct registers_32 *regs) {
 }
 
 void panic(const char* message) {
+	__asm__ volatile("cli");
     vga_clear_screen(RGB_RED);
 
     vga_print("================================================================================\n", RGB_WHITE, RGB_RED);
@@ -136,3 +139,57 @@ void panic(const char* message) {
 void c_syscall_handler(void) {
     vga_print("System call received!\n", RGB_WHITE, RGB_RED);
 }
+
+
+#define KERNEL_CS_SELECTOR 0x08
+#define USER_CS_SELECTOR   0x1B
+
+void terminate_current_user_process(void) {
+
+//    vga_print("Terminating Process %d cleanly...\n", current_process->pid);
+    
+    // 1. Free the user space allocations we tracked
+    // For now, since your test uses specific hardcoded zones:
+    free_user_space(USER_CODE_BASE, 1);
+    free_user_space(USER_STACK_MAX - USER_STACK_SIZE, USER_STACK_SIZE / 4096);
+    
+    // 2. Clear out any allocations it made on your new user heap if applicable
+    // (Once your scheduler supports multiple tasks, you would remove this process from the queue)
+    
+    // 3. Securely halt or loop if there are no other tasks running yet, 
+    // instead of letting the CPU execute garbage instructions.
+//    printf("System Stable. Standing by.\n");
+    
+    __asm__ __volatile__("cli");
+    while(1) {
+        __asm__ __volatile__("hlt");
+    }
+}
+/*
+void c_exception_handler(struct registers_32 *regs) {
+    // 1. Check if the code segment belongs to the kernel
+    // We mask with 0x3 to read the Privilege Level, or check against your exact selector
+    if ((regs->cs & 0x3) == 0) {
+        // CRITICAL: The kernel faulted! We cannot recover.
+        // Enter your newly optimized, fast-printing, CLI-guarded panic block.
+        char panic_msg[128];
+        sprintf(panic_msg, "Kernel Exception %d (Error Code: 0x%x) at EIP: 0x%x", 
+                regs->interrupt_no, regs->error_code, regs->eip);
+        panic(panic_msg);
+    }
+    
+    // 2. If we reach here, the exception came from USER SPACE (Ring 3)
+    printf("\n[Process %d] SegFault/Exception %d detected at EIP: 0x%x\n", 
+           current_process->pid, regs->interrupt_no, regs->eip);
+    
+    // 3. Handle specific exception types if you want to be fancy later
+    if (regs->int_no == 14) { // Page Fault
+        uint32_t faulting_address;
+        __asm__ __volatile__("mov %%cr2, %0" : "=r" (faulting_address));
+        printf(" -> Invalid User Memory Access at Virtual Address: 0x%x\n", faulting_address);
+    }
+    
+    // 4. Terminate the bad process safely instead of halting the computer!
+    terminate_current_user_process();
+}
+*/
